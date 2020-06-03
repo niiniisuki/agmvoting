@@ -15,25 +15,35 @@ contract Ballot {
 
     struct vote{
         address voterAddress;
-        bool choice;
+        uint choice;
     }
 
     struct voter{
         string voterName;
         bool voted;
         uint weight;
+        uint choice;
+        bool signed;
     }
 
-    uint private countResult = 0;
-    uint public finalResult = 0;
+    uint[3] private countResults = [0, 0, 0];
+    uint[3] public numResults = [0, 0, 0];
+    uint[3] public finalResults = [0, 0, 0];
+
+
     uint public totalVoter = 0;
     uint public totalVote = 0;
     uint public totalWeight = 0;
+    uint public totalWeightVoter = 0;
+    uint public totalSign = 0;
+    uint public totalSignWeight = 0;
+
     address public ballotOfficialAddress;
     string public ballotOfficialName;
     string public proposal;
 
-    mapping(uint => vote) private votes;
+    mapping(address => bool) public ballotManager;
+
     mapping(address => voter) public voterRegister;
 
     enum State { Created, Voting, Ended }
@@ -42,12 +52,20 @@ contract Ballot {
 	//creates a new ballot contract
 	constructor(
         string memory _ballotOfficialName,
-        string memory _proposal) public {
+        string memory _proposal,
+        address[] memory _managerAddresses
+
+    )
+    public {
         ballotOfficialAddress = msg.sender;
         ballotOfficialName = _ballotOfficialName;
         proposal = _proposal;
-
         state = State.Created;
+
+        ballotManager[msg.sender] = true;
+        for (uint i=0; i<_managerAddresses.length; i++) {
+            ballotManager[_managerAddresses[i]] = true;
+        }
     }
 
 
@@ -57,34 +75,54 @@ contract Ballot {
 	}
 
 	modifier onlyOfficial() {
-		require(msg.sender ==ballotOfficialAddress);
+		require(ballotManager[msg.sender]);
 		_;
 	}
+
 
 	modifier inState(State _state) {
 		require(state == _state);
 		_;
 	}
 
+	modifier notInState(State _state) {
+		require(state != _state);
+		_;
+	}
+
     event voterAdded(address voter);
     event voteStarted();
-    event voteEnded(uint finalResult);
+    event voteEnded(uint[3] finalResults);
     event voteDone(address voter);
+    event signDone(address voter);
     event proxyAdded(address voter, address proxy);
 
     //add voter
-    function addVoter(address _voterAddress, string memory _voterName)
+    function addVoter(address _voterAddress, string memory _voterName, uint weight)
         public
         inState(State.Created)
         onlyOfficial
     {
+
+        if(bytes(voterRegister[_voterAddress].voterName).length != 0){
+            totalWeightVoter -= voterRegister[_voterAddress].weight;
+
+        }else{
+            totalVoter++;
+        }
+
+        totalWeightVoter += weight;
         voter memory v;
         v.voterName = _voterName;
         v.voted = false;
-        v.weight = 1;
+        v.signed = false;
+        v.weight = weight;
+        v.choice = 99;
         voterRegister[_voterAddress] = v;
-        totalVoter++;
+
+
         emit voterAdded(_voterAddress);
+
     }
 
     //declare voting starts now
@@ -118,27 +156,56 @@ contract Ballot {
         return result;
     }
 
-
-    //voters vote by indicating their choice (true/false)
-    function doVote(bool _choice)
+    function sign()
         public
         inState(State.Voting)
         returns (bool voted)
     {
+
+        bool found = false;
+        if (bytes(voterRegister[msg.sender].voterName).length != 0
+         && !voterRegister[msg.sender].signed){
+             voterRegister[msg.sender].signed = true;
+             totalSign++;
+             totalSignWeight += voterRegister[msg.sender].weight;
+        }
+        emit signDone(msg.sender);
+
+        return found;
+    }
+
+    //voters vote by indicating their choice (true/false)
+    function doVote(uint _choice)
+        public
+        inState(State.Voting)
+        returns (bool voted)
+    {
+
         bool found = false;
 
         if (bytes(voterRegister[msg.sender].voterName).length != 0
-        && !voterRegister[msg.sender].voted && voterRegister[msg.sender].weight != 0){
-            voterRegister[msg.sender].voted = true;
+         && voterRegister[msg.sender].weight != 0){
+
             vote memory v;
             v.voterAddress = msg.sender;
             v.choice = _choice;
-            if (_choice){
-                countResult += voterRegister[msg.sender].weight;
+
+            if(voterRegister[msg.sender].voted){
+
+                countResults[voterRegister[msg.sender].choice] -= voterRegister[msg.sender].weight;
+                numResults[voterRegister[msg.sender].choice]--;
+            }else{
+                voterRegister[msg.sender].voted = true;
+                totalVote++;
+                totalWeight += voterRegister[msg.sender].weight;
             }
-            votes[totalVote] = v;
-            totalVote++;
-            totalWeight += voterRegister[msg.sender].weight;
+
+            voterRegister[msg.sender].choice = _choice;
+            countResults[_choice] += voterRegister[msg.sender].weight;
+            numResults[_choice]++;
+
+
+
             found = true;
         }
         emit voteDone(msg.sender);
@@ -152,8 +219,8 @@ contract Ballot {
         onlyOfficial
     {
         state = State.Ended;
-        finalResult = countResult; //move result from private countResult to public finalResult
-        emit voteEnded(finalResult);
+        finalResults = countResults;
+        emit voteEnded(finalResults);
     }
 
     //mass
@@ -183,5 +250,3 @@ contract Ballot {
 
 
 }
-
-
